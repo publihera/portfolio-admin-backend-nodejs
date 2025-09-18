@@ -1,134 +1,140 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool } = require("pg");
 
-// Database path
-const dbPath = path.join(__dirname, 'app.db');
-
-// Create database connection
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('Error opening database:', err.message);
-  } else {
-    console.log('Connected to SQLite database');
-    initializeTables();
-  }
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
-// Initialize database tables
-function initializeTables() {
-  // Users table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+pool.on("connect", () => {
+  console.log("Connected to PostgreSQL database");
+});
 
-  // Projects table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      description TEXT,
-      image_url TEXT,
-      project_url TEXT,
-      github_url TEXT,
-      technologies TEXT,
-      featured BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+pool.on("error", (err) => {
+  console.error("Error connecting to PostgreSQL database:", err.message);
+});
 
-  // Homepage table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS homepage (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      hero_title TEXT,
-      hero_subtitle TEXT,
-      about_text TEXT,
-      skills TEXT,
-      contact_email TEXT,
-      contact_phone TEXT,
-      social_links TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+async function initializeTables() {
+  try {
+    const client = await pool.connect();
 
-  // Images table (for tracking uploaded images)
-  db.run(`
-    CREATE TABLE IF NOT EXISTS images (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      filename TEXT NOT NULL,
-      original_name TEXT NOT NULL,
-      mimetype TEXT NOT NULL,
-      size INTEGER NOT NULL,
-      path TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    // Users table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  // Create default homepage entry if it doesn't exist
-  db.get('SELECT COUNT(*) as count FROM homepage', (err, row) => {
-    if (err) {
-      console.error('Error checking homepage table:', err.message);
-    } else if (row.count === 0) {
-      db.run(`
-        INSERT INTO homepage (hero_title, hero_subtitle, about_text)
-        VALUES ('Welcome to My Portfolio', 'Full Stack Developer', 'About me section...')
-      `);
+    // Projects table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        image_url TEXT,
+        project_url TEXT,
+        github_url TEXT,
+        technologies TEXT,
+        featured BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Homepage table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS homepage (
+        id SERIAL PRIMARY KEY,
+        hero_title TEXT,
+        hero_subtitle TEXT,
+        about_text TEXT,
+        skills TEXT,
+        contact_email TEXT,
+        contact_phone TEXT,
+        social_links TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Images table (for tracking uploaded images)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS images (
+        id SERIAL PRIMARY KEY,
+        filename TEXT NOT NULL,
+        original_name TEXT NOT NULL,
+        mimetype TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Create default homepage entry if it doesn\'t exist
+    const { rows } = await client.query(
+      "SELECT COUNT(*) as count FROM homepage"
+    );
+    if (rows[0].count === "0") {
+      await client.query(
+        `
+          INSERT INTO homepage (hero_title, hero_subtitle, about_text)
+          VALUES ($1, $2, $3)
+        `,
+        [
+          "Welcome to My Portfolio",
+          "Full Stack Developer",
+          "About me section...",
+        ]
+      );
     }
-  });
+    client.release();
+  } catch (err) {
+    console.error("Error initializing tables:", err.message);
+  }
 }
 
-// Helper function to run queries with promises
-function runQuery(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err) {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({ id: this.lastID, changes: this.changes });
-      }
-    });
-  });
+initializeTables();
+
+async function runQuery(sql, params = []) {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(sql, params);
+    return { id: result.rows[0]?.id, changes: result.rowCount };
+  } finally {
+    client.release();
+  }
 }
 
-// Helper function to get single row
-function getRow(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(row);
-      }
-    });
-  });
+async function getRow(sql, params = []) {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(sql, params);
+    return rows[0];
+  } finally {
+    client.release();
+  }
 }
 
-// Helper function to get all rows
-function getAllRows(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+async function getAllRows(sql, params = []) {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(sql, params);
+    return rows;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = {
-  db,
+  pool,
   runQuery,
   getRow,
-  getAllRows
+  getAllRows,
 };
 
